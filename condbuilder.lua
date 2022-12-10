@@ -1,3 +1,4 @@
+-- Macro Condition Builder v0.1 - aquietone
 local mq = require('mq')
 
 local isOpen = true
@@ -13,6 +14,18 @@ local TLOOptions = {
 
 local buttons = {
     '${', '}', '[', ']', '(', ')', '.', '!', '&&', '||', '==', '!=', 'Equal', 'NotEqual'
+}
+
+local examples = {
+    '${Target.Named}',
+    '${Me.PctHPs} > 70 && ${Me.PctMana} < 60',
+    '${SpawnCount[pc radius 60]} > 3',
+    '${Target.CleanName.Equal[Fippy Darkpaw]}',
+    '${Select[${Target.Class.ShortName},CLR,DRU,SHM]}',
+    '(${Me.XTarget} > 2 || ${Target.Named}) && ${BurnAllNamed}',
+    '!${Me.Buff[Illusion Benefit Greater Jann].ID}',
+    '${SpawnCount[${Me.Name}`s pet]} > 0',
+    '${Me.XTarget} > 0',
 }
 
 local function drawContextMenu()
@@ -61,6 +74,17 @@ local function drawButtons()
     end
 end
 
+local function drawExamples()
+    if ImGui.BeginCombo('Examples', '') then
+        for i,example in ipairs(examples) do
+            if ImGui.Selectable(example) then
+                expression = example
+            end
+        end
+        ImGui.EndCombo()
+    end
+end
+
 local function drawOutput()
     ImGui.NewLine()
     ImGui.Separator()
@@ -78,6 +102,7 @@ local function expressionBuilder()
         expression = ImGui.InputText('Condition', expression)
         drawContextMenu()
         drawButtons()
+        drawExamples()
         drawOutput()
     end
     ImGui.End()
