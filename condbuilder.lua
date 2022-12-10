@@ -1,4 +1,4 @@
--- Macro Condition Builder v0.1 - aquietone
+-- Macro Condition Builder v0.2 - aquietone
 local mq = require('mq')
 
 local isOpen = true
@@ -35,35 +35,41 @@ local function drawReferenceLink()
 end
 
 local function drawContextMenu()
+    local menuitems = {}
+    if expression:len() >= 2 and expression:sub(-2) == '${' then
+        -- The string ends with ${ so we can offer up some TLOs as hints
+        for _,tlo in ipairs(TLOOptions) do
+            table.insert(menuitems, tlo)
+        end
+    elseif expression:len() > 1 and expression:sub(-1) == '.' then
+        -- determine TLO name before the . to lookup members
+        local tlo = expression:match('.*[{.](.*)%.')
+        if mq.TLO[tlo] then
+            -- The string before the trailing . is a valid TLO, so we can offer up
+            -- the TLOs members as hints
+            local tlotype = mq.gettype(mq.TLO[tlo])
+            for i=0,300 do
+                local tlomember = mq.TLO.Type(tlotype).Member(i)()
+                table.insert(menuitems, tlomember)
+            end
+        end
+    end
+    if #menuitems > 20 then
+        ImGui.SetNextWindowSize(-1, ImGui.GetTextLineHeight()*20)
+    end
     if ImGui.BeginPopupContextItem() then
-        if expression:len() >= 2 and expression:sub(-2) == '${' then
-            -- The string ends with ${ so we can offer up some TLOs as hints
-            for _,tlo in ipairs(TLOOptions) do
-                if ImGui.Selectable(tlo) then
-                    expression = expression .. tlo
-                end
-            end
-        elseif expression:len() > 1 and expression:sub(-1) == '.' then
-            -- determine TLO name before the . to lookup members
-            local tlo = expression:match('.*[{.](.*)%.')
-            if mq.TLO[tlo] then
-                -- The string before the trailing . is a valid TLO, so we can offer up
-                -- the TLOs members as hints
-                local tlotype = mq.gettype(mq.TLO[tlo])
-                for i=0,300 do
-                    local tlomember = mq.TLO.Type(tlotype).Member(i)()
-                    if tlomember and ImGui.Selectable(tlomember) then
-                        expression = expression .. tlomember
-                    end
-                end
-            else
-                -- Not a TLO. It could be a member or a parameter like 
-                -- Me.CleanName. or Spawn[id 123].
-                -- Or it could just be something incomplete / invalid
-                ImGui.Text('No Suggestions')
-            end
-        else
+        if #menuitems == 0 then
+            -- Not a TLO. It could be a member or a parameter like 
+            -- Me.CleanName. or Spawn[id 123].
+            -- Or it could just be something incomplete / invalid
             ImGui.Text('No Suggestions')
+        else
+            for _,item in ipairs(menuitems) do
+                if ImGui.Selectable(item) then
+                    expression = expression .. item
+                end
+            end
+
         end
         ImGui.EndPopup()
     end
