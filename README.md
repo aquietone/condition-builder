@@ -7,10 +7,6 @@ This script provides an interface to help with building macro expressions for us
 Place `condbuilder.lua` into your lua folder.  
 Run `/lua run condbuilder`
 
-![](images/blank.png)
+![](images/blank.png) ![](images/tlomenu.png)
 
-![](images/tlomenu.png)
-
-![](images/membersmenu.png)
-
-![](images/output.png)
+![](images/membersmenu.png) ![](images/output.png)
