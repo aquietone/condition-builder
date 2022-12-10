@@ -28,6 +28,12 @@ local examples = {
     '${Me.XTarget} > 0',
 }
 
+local function drawReferenceLink()
+    if ImGui.Button('\xee\x89\x90 TLO Reference') then
+        os.execute('start https://docs.macroquest.org/reference/top-level-objects/')
+    end
+end
+
 local function drawContextMenu()
     if ImGui.BeginPopupContextItem() then
         if expression:len() >= 2 and expression:sub(-2) == '${' then
@@ -64,6 +70,7 @@ local function drawContextMenu()
 end
 
 local function drawButtons()
+    ImGui.Separator()
     for i,button in ipairs(buttons) do
         if ImGui.Button(button) then
             expression = expression .. button
@@ -75,6 +82,7 @@ local function drawButtons()
 end
 
 local function drawExamples()
+    ImGui.Separator()
     if ImGui.BeginCombo('Examples', '') then
         for i,example in ipairs(examples) do
             if ImGui.Selectable(example) then
@@ -86,7 +94,6 @@ local function drawExamples()
 end
 
 local function drawOutput()
-    ImGui.NewLine()
     ImGui.Separator()
     ImGui.Text('Output')
     if ImGui.BeginChild('outputchild', -1, -1, true) then
@@ -99,7 +106,8 @@ local function expressionBuilder()
     local isDraw = true
     isOpen, isDraw = ImGui.Begin("Macro Condition Builder", isOpen)
     if isDraw then
-        expression = ImGui.InputText('Condition', expression)
+        drawReferenceLink()
+        expression = ImGui.InputTextWithHint('Condition', '${Target.Named}', expression)
         drawContextMenu()
         drawButtons()
         drawExamples()
