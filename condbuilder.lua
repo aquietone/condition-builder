@@ -1,4 +1,4 @@
--- Macro Condition Builder v0.2 - aquietone
+-- Macro Condition Builder v0.4 - aquietone
 -- Uses some basic pattern matching to provide autocompletion with filtering under specific patterns.
 -- 1. When input ends "${" then it will provide short list of hardcoded TLOs commonly used in conditions.
 -- 2. When input ends in "${TLONAME." then it will provide all available members of the datatype returned by ${TLONAME}.
@@ -35,6 +35,57 @@ local examples = {
     '${Me.XTarget} > 0',
 }
 
+local typePatterns = {
+    { -- ${Me
+        groups='.*%${(%w*)$',
+        prefix='(.*%${)%w*$'
+    },
+    { -- ${Me.PctHPs
+        groups='.*%${(%w*)%.(%w*)$', prefix='(.*%${%w*%.)%w*$',
+        dataTypeName=function(tloName, memberInput)
+            if not (tloName) then return nil, nil end
+            return mq.gettype(mq.TLO[tloName]), memberInput
+        end
+    },
+    { -- ${FindItem[water flask].NoDrop
+        groups='.*%${(%w*)%[([%w%d%s=]*)%]%.(%w*)$', prefix='(.*%${%w*%[[%w%d%s=]*%]%.)%w*$',
+        dataTypeName=function(tloName, param, memberInput)
+            if not (tloName and param) then return nil, nil end
+            return mq.gettype(mq.TLO[tloName](param)), memberInput
+        end
+    },
+    { -- ${Me.TargetOfTarget.Name
+        groups='.*%${(%w*)%.(%w*)%.(%w*)$', prefix='(.*%${%w*%.%w*%.)%w*$',
+        dataTypeName=function(tloName, firstTloMember, secondTloMember, memberInput)
+            if not (tloName and firstTloMember and secondTloMember) then return nil, nil end
+            return mq.gettype(mq.TLO[tloName][firstTloMember][secondTloMember]), memberInput
+        end
+    },
+    { -- ${Me.Inventory[chest].Name
+        groups='.*%${(%w*)%.(%w*)%[([%w%d%s=]*)%]%.(%w*)$', prefix='(.*%${%w*%.%w*%[[%w%d%s=]*%]%.)%w*$',
+        dataTypeName=function(tloName, firstTloMember, param, memberInput)
+            if not (tloName and firstTloMember and param) then return nil, nil end
+            return mq.gettype(mq.TLO[tloName][firstTloMember](param)), memberInput
+        end
+    },
+    { -- ${Me.Buff[spirit of wolf].Duration.TimeHMS
+        groups='.*%${(%w*)%.(%w*)%[([%w%d%s=]*)%]%.(%w*)%.(%w*)$',
+        prefix='(.*%${%w*%.%w*%[[%w%d%s=]*%]%.%w*%.)%w*$',
+        dataTypeName=function(tloName, firstTloMember, param, secondTloMember, memberInput)
+            if not (tloName and firstTloMember and param and secondTloMember) then return nil, nil end
+            return mq.gettype(mq.TLO[tloName][firstTloMember](param)[secondTloMember]), memberInput
+        end
+    },
+    { -- ${Me.Inventory[23].Item[1].Name
+        groups='.*%${(%w*)%.(%w*)%[([%w%d%s=]*)%]%.(%w*)%[([%w%d%s=]*)%]%.(%w*)$',
+        prefix='.*%${%w*%.%w*%[[%w%d%s=]*%]%.%w*%[[%w%d%s=]*%]%.)%w*$',
+        dataTypeName=function(tloName, firstTloMember, param, secondTloMember, secondParam, memberInput)
+            if not (tloName and firstTloMember and param and secondTloMember and secondParam) then return nil, nil end
+            return mq.gettype(mq.TLO[tloName][firstTloMember](param)[secondTloMember](secondParam)), memberInput
+        end
+    },
+}
+
 local function drawReferenceLink()
     if imgui.Button('\xee\x89\x90 TLO Reference') then
         os.execute('start https://docs.macroquest.org/reference/top-level-objects/')
@@ -62,22 +113,8 @@ local function ComboFiltered(label, current_value, options)
         if imgui.BeginPopup('##combopopup'..label, COMBO_POPUP_FLAGS) then
             for _,value in ipairs(options) do
                 if imgui.Selectable(value) then
-                    if options.filterType == 'tlo' then
-                        local prefix = current_value:match('(.*%${)%w*$')
-                        result = prefix .. value
-                    elseif options.filterType == 'member' then
-                        local prefix = current_value:match('(.*%${%w*%.)%w*$')
-                        result = prefix .. value
-                    elseif options.filterType == 'memberafterarg' then
-                        local prefix = current_value:match('(.*%${%w*%[[%w%d%s=]*%]%.)%w*$')
-                        result = prefix .. value
-                    elseif options.filterType == 'memberaftermember' then
-                        local prefix = current_value:match('(.*%${%w*%.%w*%.)%w*$')
-                        result = prefix .. value
-                    elseif options.filterType == 'memberaftermemberwithparam' then
-                        local prefix = current_value:match('(.*%${%w*%.%w*%[[%w%d%s=]*%]%.)%w*$')
-                        result = prefix .. value
-                    end
+                    local prefix = current_value:match(typePatterns[options.filterType].prefix)
+                    result = prefix .. value
                 end
             end
             if changed or (not active and not imgui.IsWindowFocused()) then
@@ -89,7 +126,8 @@ local function ComboFiltered(label, current_value, options)
     return result, current_value ~= result
 end
 
-local function addMembersForDataType(dataTypeName, input, options)
+local function getMembersForDataType(dataTypeName, input, filterType)
+    local options = {}
     -- Get DataType definition for the type name
     local dataType = mq.TLO.Type(dataTypeName)
     for i=0,300 do
@@ -110,12 +148,15 @@ local function addMembersForDataType(dataTypeName, input, options)
             end
         end
     end
+    options.filterType = filterType
+    table.sort(options)
+    return options
 end
 
-local function populateFilter(expression)
+local function getFilteredOptions(expression)
     local options = {}
     -- Match value ending with pattern ${\w* as possible TLO name
-    local tloInput = expression:match('.*%${(%w*)$')
+    local tloInput = expression:match(typePatterns[1].groups)
     if tloInput then
         -- Populate dropdown with hardcoded list of TLOs to select from
         for _,tlo in ipairs(TLOOptions) do
@@ -124,52 +165,14 @@ local function populateFilter(expression)
                 table.insert(options, tlo)
             end
         end
-        options.filterType = 'tlo'
+        options.filterType = 1
         return options
     end
-    -- Match value ending with pattern ${\w*.\w* as possible TLO Member naem
-    local tloName, memberInput = expression:match('.*%${(%w*)%.(%w*)$')
-    if memberInput and tloName then
-        -- Get string name of the TLO data type
-        local dataTypeName = mq.gettype(mq.TLO[tloName])
+    for i=2,7 do
+        local typePattern = typePatterns[i]
+        local dataTypeName, memberInput = typePattern.dataTypeName(expression:match(typePattern.groups))
         if dataTypeName then
-            addMembersForDataType(dataTypeName, memberInput, options)
-            options.filterType = 'member'
-            table.sort(options)
-            return options
-        end
-    end
-    -- Match values ending with pattern ${\w*[\w\d*].\w* as possible TLO Member name after TLO parameters
-    local tloName, param, memberInput = expression:match('.*%${(%w*)%[([%w%d%s=]*)%]%.(%w*)$')
-    if tloName and param and memberInput then
-        local dataTypeName = mq.gettype(mq.TLO[tloName](param))
-        if dataTypeName then
-            addMembersForDataType(dataTypeName, memberInput, options)
-            options.filterType = 'memberafterarg'
-            table.sort(options)
-            return options
-        end
-    end
-    -- Match values ending with pattern ${\w*.\w*.\w* as possible TLO Member name after TLO member
-    local tloName, firstTloMember, memberInput = expression:match('.*%${(%w*)%.(%w*)%.(%w*)$')
-    if tloName and firstTloMember and memberInput then
-        local dataTypeName = mq.gettype(mq.TLO[tloName][firstTloMember])
-        if dataTypeName then
-            addMembersForDataType(dataTypeName, memberInput, options)
-            options.filterType = 'memberaftermember'
-            table.sort(options)
-            return options
-        end
-    end
-    -- Match values ending with pattern ${\w*.\w*[\w\d*].\w* as possible TLO Member name after TLO member
-    local tloName, firstTloMember, param, memberInput = expression:match('.*%${(%w*)%.(%w*)%[([%w%d%s=]*)%]%.(%w*)$')
-    if tloName and firstTloMember and param and memberInput then
-        local dataTypeName = mq.gettype(mq.TLO[tloName][firstTloMember](param))
-        if dataTypeName then
-            addMembersForDataType(dataTypeName, memberInput, options)
-            options.filterType = 'memberaftermemberwithparam'
-            table.sort(options)
-            return options
+            return getMembersForDataType(dataTypeName, memberInput, i)
         end
     end
     return options
@@ -220,7 +223,7 @@ local function expressionBuilder(expression, filteredOptions)
         local result, changed = ComboFiltered('Condition', expression, filteredOptions)
         if changed then
             expression = result
-            filteredOptions = populateFilter(expression)
+            filteredOptions = getFilteredOptions(expression)
         end
         expression = drawButtons(expression)
         expression = drawExamples(expression)
