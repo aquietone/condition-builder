@@ -12,17 +12,15 @@ local imgui = require('ImGui')
 
 local isOpen = true
 
-local expression = ''
-
 -- Random sampling of TLOs that seem more likely to be used in conditions
 local TLOOptions = {
     'Me', 'Target', 'Spawn', 'SpawnCount', 'Spell', 'Math',
-    'Cursor', 'Defined', 'FindItem', 'Group', 'Raid',
+    'Cursor', 'Defined', 'FindItem', 'FindItemCount', 'Group', 'Raid',
     'If', 'Select', 'Range', 'String', 'Int', 'Bool',
 }
 
 local buttons = {
-    '${', '}', '[', ']', '(', ')', '.', '!', '&&', '||', '==', '!=', 'Equal', 'NotEqual'
+    '${', '}', '[', ']', '(', ')', '.', '!', '&&', '||', '==', '!=', 'Equal', 'NotEqual', 'NULL'
 }
 
 local examples = {
@@ -43,9 +41,6 @@ local function drawReferenceLink()
     end
 end
 
-local filterType = 'tlo'
-local filteredOptions = {}
-
 local COMBO_POPUP_FLAGS = bit32.bor(ImGuiWindowFlags.NoTitleBar, ImGuiWindowFlags.NoMove, ImGuiWindowFlags.NoResize, ImGuiWindowFlags.ChildWindow)
 ---Draw a combo box with filterable options
 ---@param label string #The label for the combo
@@ -59,29 +54,28 @@ local function ComboFiltered(label, current_value, options)
     local active = imgui.IsItemActive()
     local activated = imgui.IsItemActivated()
     if activated then imgui.OpenPopup('##combopopup'..label) end
-    if #filteredOptions > 0 then
+    if #options > 0 then
         local itemRectMinX, _ = imgui.GetItemRectMin()
         local _, itemRectMaxY = imgui.GetItemRectMax()
         imgui.SetNextWindowPos(itemRectMinX, itemRectMaxY)
-        imgui.SetNextWindowSize(avail.x - ImGui.CalcTextSize(label), #filteredOptions > 20 and imgui.GetTextLineHeight()*20 or -1)
-        --end
+        imgui.SetNextWindowSize(avail.x - ImGui.CalcTextSize(label), #options > 20 and imgui.GetTextLineHeight()*20 or -1)
         if imgui.BeginPopup('##combopopup'..label, COMBO_POPUP_FLAGS) then
             for _,value in ipairs(options) do
                 if imgui.Selectable(value) then
-                    if filterType == 'tlo' then
-                        local prefix = expression:match('(.*%${)%w*$')
+                    if options.filterType == 'tlo' then
+                        local prefix = current_value:match('(.*%${)%w*$')
                         result = prefix .. value
-                    elseif filterType == 'member' then
-                        local prefix = expression:match('(.*%${%w*%.)%w*$')
+                    elseif options.filterType == 'member' then
+                        local prefix = current_value:match('(.*%${%w*%.)%w*$')
                         result = prefix .. value
-                    elseif filterType == 'memberafterarg' then
-                        local prefix = expression:match('(.*%${%w*%[[%w%d]*%]%.)%w*$')
+                    elseif options.filterType == 'memberafterarg' then
+                        local prefix = current_value:match('(.*%${%w*%[[%w%d%s=]*%]%.)%w*$')
                         result = prefix .. value
-                    elseif filterType == 'memberaftermember' then
-                        local prefix = expression:match('(.*%${%w*%.%w*%.)%w*$')
+                    elseif options.filterType == 'memberaftermember' then
+                        local prefix = current_value:match('(.*%${%w*%.%w*%.)%w*$')
                         result = prefix .. value
-                    elseif filterType == 'memberaftermemberwithparam' then
-                        local prefix = expression:match('(.*%${%w*%.%w*%[[%w%d]*%]%.)%w*$')
+                    elseif options.filterType == 'memberaftermemberwithparam' then
+                        local prefix = current_value:match('(.*%${%w*%.%w*%[[%w%d%s=]*%]%.)%w*$')
                         result = prefix .. value
                     end
                 end
@@ -95,8 +89,31 @@ local function ComboFiltered(label, current_value, options)
     return result, current_value ~= result
 end
 
-local function populateFilter()
-    filteredOptions = {}
+local function addMembersForDataType(dataTypeName, input, options)
+    -- Get DataType definition for the type name
+    local dataType = mq.TLO.Type(dataTypeName)
+    for i=0,300 do
+        local tloMember = dataType.Member(i)()
+        -- Iterate over the members and populate the dropdown with entries matching the input following the ${\w*.
+        if tloMember and tloMember:find(input) then
+            table.insert(options, tloMember)
+            options[tloMember] = true
+        end
+    end
+    -- Repeat for inherited DataType
+    if dataType.InheritedType() then
+        local parentDataTypeName = mq.TLO.Type(dataType.InheritedType)
+        for i=0,300 do
+            local tloMember = parentDataTypeName.Member(i)()
+            if tloMember and not options[tloMember] and tloMember:find(input) then
+                table.insert(options, tloMember)
+            end
+        end
+    end
+end
+
+local function populateFilter(expression)
+    local options = {}
     -- Match value ending with pattern ${\w* as possible TLO name
     local tloInput = expression:match('.*%${(%w*)$')
     if tloInput then
@@ -104,11 +121,11 @@ local function populateFilter()
         for _,tlo in ipairs(TLOOptions) do
             -- Filter the list based on the input following the ${
             if tlo:find(tloInput) then
-                table.insert(filteredOptions, tlo)
+                table.insert(options, tlo)
             end
         end
-        filterType = 'tlo'
-        return
+        options.filterType = 'tlo'
+        return options
     end
     -- Match value ending with pattern ${\w*.\w* as possible TLO Member naem
     local tloName, memberInput = expression:match('.*%${(%w*)%.(%w*)$')
@@ -116,56 +133,21 @@ local function populateFilter()
         -- Get string name of the TLO data type
         local dataTypeName = mq.gettype(mq.TLO[tloName])
         if dataTypeName then
-            -- Get DataType definition for the type name
-            local dataType = mq.TLO.Type(dataTypeName)
-            for i=0,300 do
-                local tloMember = dataType.Member(i)()
-                -- Iterate over the members and populate the dropdown with entries matching the input following the ${\w*.
-                if tloMember and tloMember:find(memberInput) then
-                    table.insert(filteredOptions, tloMember)
-                    filteredOptions[tloMember] = true
-                end
-            end
-            -- Repeat for inherited DataType
-            if dataType.InheritedType() then
-                local parentDataTypeName = mq.TLO.Type(dataType.InheritedType)
-                for i=0,300 do
-                    local tloMember = parentDataTypeName.Member(i)()
-                    if tloMember and not filteredOptions[tloMember] and tloMember:find(memberInput) then
-                        table.insert(filteredOptions, tloMember)
-                    end
-                end
-            end
-            filterType = 'member'
-            table.sort(filteredOptions)
-            return
+            addMembersForDataType(dataTypeName, memberInput, options)
+            options.filterType = 'member'
+            table.sort(options)
+            return options
         end
     end
     -- Match values ending with pattern ${\w*[\w\d*].\w* as possible TLO Member name after TLO parameters
-    local tloName, param, memberInput = expression:match('.*%${(%w*)%[([%w%d]*)%]%.(%w*)$')
+    local tloName, param, memberInput = expression:match('.*%${(%w*)%[([%w%d%s=]*)%]%.(%w*)$')
     if tloName and param and memberInput then
         local dataTypeName = mq.gettype(mq.TLO[tloName](param))
         if dataTypeName then
-            local dataType = mq.TLO.Type(dataTypeName)
-            for i=0,300 do
-                local tloMember = dataType.Member(i)()
-                if tloMember and tloMember:find(memberInput) then
-                    table.insert(filteredOptions, tloMember)
-                    filteredOptions[tloMember] = true
-                end
-            end
-            if dataType.InheritedType() then
-                local parentDataTypeName = mq.TLO.Type(dataType.InheritedType)
-                for i=0,300 do
-                    local tloMember = parentDataTypeName.Member(i)()
-                    if tloMember and not filteredOptions[tloMember] and tloMember:find(memberInput) then
-                        table.insert(filteredOptions, tloMember)
-                    end
-                end
-            end
-            filterType = 'memberafterarg'
-            table.sort(filteredOptions)
-            return
+            addMembersForDataType(dataTypeName, memberInput, options)
+            options.filterType = 'memberafterarg'
+            table.sort(options)
+            return options
         end
     end
     -- Match values ending with pattern ${\w*.\w*.\w* as possible TLO Member name after TLO member
@@ -173,82 +155,55 @@ local function populateFilter()
     if tloName and firstTloMember and memberInput then
         local dataTypeName = mq.gettype(mq.TLO[tloName][firstTloMember])
         if dataTypeName then
-            local dataType = mq.TLO.Type(dataTypeName)
-            for i=0,300 do
-                local tloMember = dataType.Member(i)()
-                if tloMember and tloMember:find(memberInput) then
-                    table.insert(filteredOptions, tloMember)
-                    filteredOptions[tloMember] = true
-                end
-            end
-            if dataType.InheritedType() then
-                local parentDataTypeName = mq.TLO.Type(dataType.InheritedType)
-                for i=0,300 do
-                    local tloMember = parentDataTypeName.Member(i)()
-                    if tloMember and not filteredOptions[tloMember] and tloMember:find(memberInput) then
-                        table.insert(filteredOptions, tloMember)
-                    end
-                end
-            end
-            filterType = 'memberaftermember'
-            table.sort(filteredOptions)
-            return
+            addMembersForDataType(dataTypeName, memberInput, options)
+            options.filterType = 'memberaftermember'
+            table.sort(options)
+            return options
         end
     end
     -- Match values ending with pattern ${\w*.\w*[\w\d*].\w* as possible TLO Member name after TLO member
-    local tloName, firstTloMember, param, memberInput = expression:match('.*%${(%w*)%.(%w*)%[([%w%d]*)%]%.(%w*)$')
+    local tloName, firstTloMember, param, memberInput = expression:match('.*%${(%w*)%.(%w*)%[([%w%d%s=]*)%]%.(%w*)$')
     if tloName and firstTloMember and param and memberInput then
         local dataTypeName = mq.gettype(mq.TLO[tloName][firstTloMember](param))
         if dataTypeName then
-            local dataType = mq.TLO.Type(dataTypeName)
-            for i=0,300 do
-                local tloMember = dataType.Member(i)()
-                if tloMember and tloMember:find(memberInput) then
-                    table.insert(filteredOptions, tloMember)
-                    filteredOptions[tloMember] = true
-                end
-            end
-            if dataType.InheritedType() then
-                local parentDataTypeName = mq.TLO.Type(dataType.InheritedType)
-                for i=0,300 do
-                    local tloMember = parentDataTypeName.Member(i)()
-                    if tloMember and not filteredOptions[tloMember] and tloMember:find(memberInput) then
-                        table.insert(filteredOptions, tloMember)
-                    end
-                end
-            end
-            filterType = 'memberaftermemberwithparam'
-            table.sort(filteredOptions)
-            return
+            addMembersForDataType(dataTypeName, memberInput, options)
+            options.filterType = 'memberaftermemberwithparam'
+            table.sort(options)
+            return options
         end
     end
+    return options
 end
 
-local function drawButtons()
+local function drawButtons(expression)
+    local result = expression
     imgui.Separator()
     for i,button in ipairs(buttons) do
         if imgui.Button(button) then
-            expression = expression .. button
+            result = expression .. button
         end
-        if i % 7 ~= 0 then
+        if i % 9 ~= 0 then
             imgui.SameLine()
         end
     end
+    return result
 end
 
-local function drawExamples()
+local function drawExamples(expression)
+    local result = expression
     imgui.Separator()
     if imgui.BeginCombo('Examples', '') then
         for i,example in ipairs(examples) do
             if imgui.Selectable(example) then
-                expression = example
+                result = example
             end
         end
         imgui.EndCombo()
     end
+    return result
 end
 
-local function drawOutput()
+local function drawOutput(expression)
     imgui.Separator()
     imgui.Text('Output')
     if imgui.BeginChild('outputchild', -1, -1, ImGuiChildFlags.Border, 0) then
@@ -257,25 +212,32 @@ local function drawOutput()
     imgui.EndChild()
 end
 
-local function expressionBuilder()
+local function expressionBuilder(expression, filteredOptions)
     local isDraw = true
     isOpen, isDraw = imgui.Begin("Macro Condition Builder", isOpen)
     if isDraw then
         drawReferenceLink()
-        local changed
-        expression, changed = ComboFiltered('Condition', expression, filteredOptions)
+        local result, changed = ComboFiltered('Condition', expression, filteredOptions)
         if changed then
-            populateFilter()
+            expression = result
+            filteredOptions = populateFilter(expression)
         end
-        drawButtons()
-        drawExamples()
-        drawOutput()
+        expression = drawButtons(expression)
+        expression = drawExamples(expression)
+        drawOutput(expression)
     end
     imgui.End()
+    return expression, filteredOptions
 end
 
-mq.imgui.init('condbuilder', expressionBuilder)
+local function main()
+    local filteredOptions = {filterType = 'tlo'}
+    local expression = ''
+    mq.imgui.init('condbuilder', function() expression, filteredOptions = expressionBuilder(expression, filteredOptions) end)
 
-while isOpen do
-    mq.delay(1000)
+    while isOpen do
+        mq.delay(1000)
+    end
 end
+
+main()
